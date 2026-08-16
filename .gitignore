@@ -1,0 +1,13 @@
+# Local editor config (machine-specific)
+.vscode/
+
+# Knowledge base and working notes
+knowledge
+
+# Internal design notes and working docs — never tracked, never shipped
+.notes/
+
+# Release archives and build output
+release/
+*.zip
+*.rar

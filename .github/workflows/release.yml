@@ -1,0 +1,39 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on tags like v0.2, v0.3, etc.
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create release zip
+        run: |
+          mkdir -p release
+          git archive HEAD --prefix=xpReborn/ | tar -xC release/
+          cd release && zip -r xpReborn.zip xpReborn && cd ..
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: xpReborn.${{ steps.version.outputs.VERSION }}
+          files: |
+            release/xpReborn.zip
+          generate_release_notes: true
+          draft: true
+          fail_on_unmatched_files: true
