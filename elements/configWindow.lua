@@ -4,6 +4,7 @@
 
 local imgui           = require('imgui')
 local dedicationItems = require('data/dedicationItems')
+local uiTheme         = require('libs/uiTheme')
 
 local M = {}
 
@@ -12,62 +13,6 @@ local IMGUI_AUTO_RESIZE = 64
 local WINDOW_WIDTH      = 240
 
 local open = false
-
------------------------------------------------------------------------
--- Style helpers
------------------------------------------------------------------------
-
--- Blue gradient fade subheading (solid left -> transparent right).
-local function drawGradientHeader(text, availW, helpText)
-    local drawlist    = imgui.GetWindowDrawList()
-    local x, y       = imgui.GetCursorScreenPos()
-    local lineH       = imgui.GetTextLineHeightWithSpacing()
-    local gradWidth   = availW * 0.75
-    local colLeft     = { 0.25, 0.40, 0.85, 1.00 }
-    local colRight    = { colLeft[1], colLeft[2], colLeft[3], 0.00 }
-    local colLeftU32  = imgui.GetColorU32(colLeft)
-    local colRightU32 = imgui.GetColorU32(colRight)
-
-    drawlist:AddRectFilledMultiColor(
-        { x, y },
-        { x + gradWidth, y + lineH },
-        colLeftU32, colRightU32, colRightU32, colLeftU32
-    )
-
-    imgui.SetCursorScreenPos({ x + 4, y + 2 })
-    imgui.Text(text)
-    if helpText then
-        imgui.SameLine()
-        imgui.TextDisabled('(?)')
-        if imgui.IsItemHovered() then
-            imgui.SetTooltip(helpText)
-        end
-    end
-
-    local _, newY = imgui.GetCursorScreenPos()
-    imgui.SetCursorScreenPos({ x, newY })
-    imgui.Spacing()
-end
-
--- Rounded primary (blue) or ghost (transparent) button.
-local function styledButton(label, size, isPrimary)
-    imgui.PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0)
-
-    if isPrimary then
-        imgui.PushStyleColor(ImGuiCol_Button,        { 0.25, 0.40, 0.85, 1.00 })
-        imgui.PushStyleColor(ImGuiCol_ButtonHovered, { 0.30, 0.48, 0.95, 1.00 })
-        imgui.PushStyleColor(ImGuiCol_ButtonActive,  { 0.18, 0.32, 0.70, 1.00 })
-    else
-        imgui.PushStyleColor(ImGuiCol_Button,        { 0.00, 0.00, 0.00, 0.00 })
-        imgui.PushStyleColor(ImGuiCol_ButtonHovered, { 1.00, 1.00, 1.00, 0.12 })
-        imgui.PushStyleColor(ImGuiCol_ButtonActive,  { 1.00, 1.00, 1.00, 0.20 })
-    end
-
-    local clicked = imgui.Button(label, size)
-    imgui.PopStyleColor(3)
-    imgui.PopStyleVar(1)
-    return clicked
-end
 
 -----------------------------------------------------------------------
 -- Public API
@@ -96,72 +41,50 @@ end
 function M.draw(xrSettings, state, cb)
     if not open then return end
 
-    imgui.SetNextWindowSize({ WINDOW_WIDTH, 0 }, 1)
-
-    local winOpen = { true }
-    if imgui.Begin('xpReborn.' .. addon.version, winOpen, IMGUI_AUTO_RESIZE) then
-
-        local avail  = imgui.GetContentRegionAvail()
-        local availW = type(avail) == 'table' and avail[1] or avail
-        local itemW  = math.floor(availW * 0.80)
-        local pad    = math.floor((availW - itemW) * 0.5)
-        local indent = 8
-        local comboW = math.floor((availW - indent) * 0.65)
-
+    local function drawBody()
         -- ============================================================
         -- Display
         -- ============================================================
-        drawGradientHeader('Display', availW, 'Toggle which text elements appear on the XP bar.')
+        uiTheme.header('Display', 'Toggle which text elements appear on the XP bar.')
 
-        imgui.SetCursorPosX(imgui.GetCursorPosX() + indent)
+        imgui.Indent(uiTheme.indent)
         local showJobLevel = { xrSettings.display.showJobLevel == true }
         if imgui.Checkbox('Show job / level', showJobLevel) then
             cb.onShowJobLevel(showJobLevel[1])
         end
-        if imgui.IsItemHovered() then
-            imgui.SetTooltip('Show the current job abbreviation and level (e.g. NIN 75).')
-        end
+        uiTheme.helpMarker('Show the current job abbreviation and level (e.g. NIN 75).')
 
-        imgui.SetCursorPosX(imgui.GetCursorPosX() + indent)
         local showNumbers = { xrSettings.display.showNumbers == true }
         if imgui.Checkbox('Show numbers', showNumbers) then
             cb.onShowNumbers(showNumbers[1])
         end
-        if imgui.IsItemHovered() then
-            imgui.SetTooltip('Show current XP / XP-to-level numbers (or LP / merit count in limit mode).')
-        end
+        uiTheme.helpMarker('Show current XP / XP-to-level numbers (or LP / merit count in limit mode).')
 
-        imgui.SetCursorPosX(imgui.GetCursorPosX() + indent)
         local showPercent = { xrSettings.display.showPercent == true }
         if imgui.Checkbox('Show percent', showPercent) then
             cb.onShowPercent(showPercent[1])
         end
-        if imgui.IsItemHovered() then
-            imgui.SetTooltip('Show progress as a percentage beneath the numbers.')
-        end
+        uiTheme.helpMarker('Show progress as a percentage beneath the numbers.')
 
-        imgui.SetCursorPosX(imgui.GetCursorPosX() + indent)
         local showDedication = { xrSettings.display.showDedication == true }
         if imgui.Checkbox('Show dedication', showDedication) then
             cb.onShowDedication(showDedication[1])
         end
-        if imgui.IsItemHovered() then
-            imgui.SetTooltip('Show the dedication bar and label when a dedication item is active.')
-        end
+        uiTheme.helpMarker('Show the dedication bar and label when a dedication item is active.')
+        imgui.Unindent(uiTheme.indent)
 
         imgui.Spacing()
 
         -- ============================================================
         -- Dedication
         -- ============================================================
-        drawGradientHeader(
+        uiTheme.header(
             'Dedication',
-            availW,
             'Track XP bonus items (Emperor Band, Wandering Heroes, etc.). The bar shrinks as the budget is used.'
         )
 
         local ded = state.dedication
-        imgui.SetCursorPosX(imgui.GetCursorPosX() + indent)
+        imgui.Indent(uiTheme.indent)
         if ded.active and ded.itemMax > 0 then
             local pct      = (1 - ded.norm) * 100
             local acquired = math.floor(ded.acquired)
@@ -174,42 +97,33 @@ function M.draw(xrSettings, state, cb)
             imgui.TextDisabled('No dedication active.')
         end
 
-        imgui.SetCursorPosX(imgui.GetCursorPosX() + indent)
         local defaultingEnabled = { xrSettings.dedication.defaultingEnabled == true }
         if imgui.Checkbox('Auto-assume default item', defaultingEnabled) then
             cb.onDefaultingEnabled(defaultingEnabled[1])
         end
-        if imgui.IsItemHovered() then
-            imgui.SetTooltip(
-                'When enabled, automatically assumes a dedication item is active if the dedication ' ..
-                'buff is present but no item-use packet was seen.'
-            )
-        end
+        uiTheme.helpMarker(
+            'When enabled, automatically assumes a dedication item is active if the dedication ' ..
+            'buff is present but no item-use packet was seen.'
+        )
 
-        imgui.SetCursorPosX(imgui.GetCursorPosX() + indent)
         local overflowEnabled = { xrSettings.dedication.overflowEnabled == true }
         if imgui.Checkbox('Dedication overflow', overflowEnabled) then
             cb.onOverflowEnabled(overflowEnabled[1])
         end
-        if imgui.IsItemHovered() then
-            imgui.SetTooltip(
-                'Allow the acquired XP to exceed the item max\n' ..
-                'while the buff is still active (e.g. 10040 / 10000).'
-            )
-        end
+        uiTheme.helpMarker(
+            'Allow the acquired XP to exceed the item max\n' ..
+            'while the buff is still active (e.g. 10040 / 10000).'
+        )
 
         if xrSettings.dedication.defaultingEnabled then
-            imgui.SetCursorPosX(imgui.GetCursorPosX() + indent)
-            imgui.Text('Default item:')
-
             local defaultId    = xrSettings.dedication.defaultItemId
             local currentEntry = dedicationItems[defaultId]
             local currentName  = currentEntry and currentEntry.name
                 or dedicationItems[dedicationItems.ordered[1].id].name
 
-            imgui.SetCursorPosX(imgui.GetCursorPosX() + indent)
-            imgui.SetNextItemWidth(comboW)
-            if imgui.BeginCombo('##defitem', currentName) then
+            imgui.Indent(uiTheme.subIndent)
+            imgui.SetNextItemWidth(uiTheme.comboWidth())
+            if imgui.BeginCombo('Default item##defitem', currentName) then
                 for _, item in ipairs(dedicationItems.ordered) do
                     local selected = (item.id == defaultId)
                     if imgui.Selectable(dedicationItems[item.id].name, selected) then
@@ -219,12 +133,13 @@ function M.draw(xrSettings, state, cb)
                 end
                 imgui.EndCombo()
             end
+            imgui.Unindent(uiTheme.subIndent)
         end
+        imgui.Unindent(uiTheme.indent)
 
         imgui.Spacing()
 
-        imgui.SetCursorPosX(imgui.GetCursorPosX() + pad)
-        if styledButton('Reset##dedresetbtn', { itemW, 0 }, false) then
+        if uiTheme.centeredButton('Reset##dedresetbtn', 'ghost') then
             cb.onResetDedication()
         end
         if imgui.IsItemHovered() then
@@ -236,30 +151,43 @@ function M.draw(xrSettings, state, cb)
         -- ============================================================
         -- Position
         -- ============================================================
-        drawGradientHeader('Position', availW)
+        uiTheme.header('Position')
 
-        imgui.SetCursorPosX(imgui.GetCursorPosX() + indent)
+        imgui.Indent(uiTheme.indent)
         local lockPosition = { xrSettings.lockPosition == true }
         if imgui.Checkbox('Lock position', lockPosition) then
             cb.onLockPosition(lockPosition[1])
         end
-        if imgui.IsItemHovered() then
-            imgui.SetTooltip('Disable drag-to-move so the bar cannot be accidentally repositioned.')
-        end
+        uiTheme.helpMarker('Disable drag-to-move so the bar cannot be accidentally repositioned.')
+        imgui.Unindent(uiTheme.indent)
 
-        imgui.SetCursorPosX(imgui.GetCursorPosX() + pad)
-        if styledButton('Reset Position##resetpos', { itemW, 0 }, false) then
+        imgui.Spacing()
+        imgui.Separator()
+        imgui.Spacing()
+
+        if uiTheme.centeredButton('Reset position##resetpos', 'ghost') then
             cb.onResetAnchor()
         end
         if imgui.IsItemHovered() then
             imgui.SetTooltip('Snap bar to position (100, 100). Use if it has moved off-screen.')
         end
     end
+
+    local n = uiTheme.push()
+    imgui.SetNextWindowSize({ WINDOW_WIDTH, 0 }, 1)
+
+    local winOpen = { true }
+    local ok, err = true, nil
+    if imgui.Begin('xpReborn.' .. addon.version, winOpen, IMGUI_AUTO_RESIZE) then
+        ok, err = pcall(drawBody)
+    end
     imgui.End()
+    uiTheme.pop(n)
 
     if not winOpen[1] then
         open = false
     end
+    if not ok then error(err, 0) end
 end
 
 return M

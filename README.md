@@ -41,7 +41,7 @@ Windows.
 | `/xr help` | List commands in chat |
 
 The bar is drag-to-move. Lock it in the config window once it's where you want it, and
-use **Reset Position** if it ever ends up off-screen.
+use **Reset position** if it ever ends up off-screen.
 
 ## License
 
