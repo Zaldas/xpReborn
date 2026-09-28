@@ -5,7 +5,7 @@
 
 addon.name    = 'xpReborn'
 addon.author  = 'Zaldas'
-addon.version = '1.0'
+addon.version = '1.1'
 addon.desc    = 'XP / LP bar overlay with dedication item tracking'
 addon.link    = 'https://github.com/Zaldas/xpReborn'
 
