@@ -38,7 +38,6 @@ function uiContainer:init(layout)
     self.super:init(layout)
 
     self.children = {}
-    self._anyChildAnimating = false
 
     return self.isEnabled
 end
@@ -142,12 +141,8 @@ function uiContainer:update()
 
     self.super:update()
 
-    self._anyChildAnimating = false
     for _, child in ipairs(self.children) do
         child:update()
-        if child._isAnimating or child._anyChildAnimating then
-            self._anyChildAnimating = true
-        end
     end
 end
 

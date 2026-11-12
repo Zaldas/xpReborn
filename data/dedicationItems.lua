@@ -2,7 +2,7 @@
 -- Dedication (XP boost) item database.
 -- rate = bonus percentage (50 = +50%, 100 = +100% = double XP)
 -- max  = total bonus XP budget before item expires
--- Rate/max values for all five items confirmed HorizonXI-accurate by the user on 2026-07-10.
+-- Rate/max values are HorizonXI's; they diverge from LSB.
 
 local items = {
     [15763] = { id = 15763, name = 'Emperor Band',     rate = 75,  max = 2250  },

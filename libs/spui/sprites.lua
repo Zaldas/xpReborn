@@ -27,7 +27,7 @@ local nsVecScale = ffi.new('D3DXVECTOR2[9]')
 local function createD3DSprite()
     local ptr = ffi.new('ID3DXSprite*[1]')
     if ffi.C.D3DXCreateSprite(d3dDevice, ptr) ~= ffi.C.S_OK then
-        error('[xpReborn] Failed to create D3DXSprite')
+        error(string.format('[%s] Failed to create D3DXSprite', addon.name))
     end
     return d3d8.gc_safe_release(ffi.cast('ID3DXSprite*', ptr[0]))
 end
@@ -117,7 +117,9 @@ local function renderNineSlice(spr, v)
 end
 
 -- Global render dispatcher
-ashita.events.register('d3d_present', '__xpreborn_spui_present_cb', function()
+local PRESENT_CB = '__xpreborn_spui_present_cb'
+
+ashita.events.register('d3d_present', PRESENT_CB, function()
     if d3dSprite ~= nil then
         d3dSprite:Begin()
         for _, eng in ipairs(engines) do
@@ -148,7 +150,7 @@ end)
 function M.newEngine()
     local engine = {
         renderInfo  = {},     -- renderKey -> sprite obj
-        sortedKeys  = {},     -- ordered for z-rendering
+        sortedKeys  = {},     -- renderKeys in creation order; drawn in this order, never sorted
         sortedCount = 0,
         nextKey     = 1,      -- monotonic; never reused
     }
@@ -243,6 +245,15 @@ end
 -- Clears the image cache (call on addon reload if textures change).
 function M.clearCache()
     imageCache = {}
+end
+
+-- Unload teardown. Call after every gdifonts object is destroyed: the dispatcher above
+-- calls gdi:render(), so it is unregistered before the font manager is released.
+function M.dispose()
+    ashita.events.unregister('d3d_present', PRESENT_CB)
+    engines = {}
+    M.clearCache()
+    gdi:destroy_interface()
 end
 
 return M

@@ -46,7 +46,8 @@ function uiBar:init(layout, engine, value)
         self.exactValue = value
         self.currentValue = nil
 
-        self.animSpeed = (self.layout.animSpeed and self.layout.animSpeed > 0) and self.layout.animSpeed or 1
+        local speed = self.layout.animSpeed
+        self.animSpeed = (speed and speed > 0) and math.min(speed, 1) or 1
 
         self.imgBg = nil
         self.imgBar = nil
@@ -89,18 +90,19 @@ end
 function uiBar:update()
     if not self.isEnabled then return end
 
-    if self.currentValue ~= self.value then
+    if self.currentValue == nil or self.exactValue ~= self.value then
         self.exactValue = self.exactValue + (self.value - self.exactValue) * self.animSpeed
         self.exactValue = math.min(math.max(self.exactValue, 0), 1)
+        -- Snaps within half a 3 dp step; the geometric ease never reaches value exactly.
+        if math.abs(self.value - self.exactValue) < 0.0005 then
+            self.exactValue = self.value
+        end
         self.currentValue = utils:round(self.exactValue, 3)
 
         if self.imgBar then
             self.imgBar:size(self.sizeBar.x * self.currentValue, self.sizeBar.y)
         end
     end
-
-    -- Signal to parent container whether this bar needs to keep running next frame.
-    self._isAnimating = self.alwaysUpdate or (self.currentValue ~= self.value)
 
     self.super:update()
 end

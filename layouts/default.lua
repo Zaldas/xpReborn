@@ -31,12 +31,6 @@ return {
             color       = '#C8A030FF',
             sliceBorder = { 30, 30, 60, 60 },
         },
-        imgGlow = {
-            path  = 'assets/BarGlow.png',
-            size  = { 8, 64 },
-            pos   = { 24, 0 },
-            color = '#FFE870FF',
-        },
     },
 
     -- ── Dedication budget bar (narrower, same height, below main bar) ────────

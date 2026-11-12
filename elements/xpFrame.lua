@@ -10,6 +10,7 @@
 -- folder; uiImage prepends addon.path internally (see libs/spui/uiImage.lua), so
 -- this module must NOT prepend it again.
 
+local imgui       = require('imgui')
 local sprites     = require('libs/spui/sprites')
 local uiContainer = require('libs/spui/uiContainer')
 local uiBar       = require('libs/spui/uiBar')
@@ -20,13 +21,10 @@ local utils       = require('libs/spui/utils')
 local resY    = AshitaCore:GetConfigurationManager():GetFloat('boot', 'ffxi.registry', '0002', 768)
 local uiScale = resY / 1440
 
--- Main XP bar layout dimensions (1440p baseline). Used for drag hit testing.
--- BAR_W/BAR_H are fallback defaults; barW/barH are the live values, set from
--- the layout's xpBar.imgBg.size in initialize() when available.
-local BAR_W = 537
-local BAR_H = 64
-local barW  = BAR_W
-local barH  = BAR_H
+-- Main XP bar size (1440p baseline) for drag hit testing; set from the layout's
+-- xpBar.imgBg.size in initialize().
+local barW = 0
+local barH = 0
 
 -- Windows mouse message ids (match Ashita's 'mouse' event e.message values)
 local MSG_LBUTTON_DOWN = 513
@@ -54,6 +52,8 @@ local dragActive  = false
 local dragOffsetX = 0
 local dragOffsetY = 0
 local anchorDirty = false
+-- A drag ended by suppression; the rest of its gesture is still blocked from the game.
+local dragCancelled = false
 
 -- Tracks whether the dedication elements are currently shown (avoids redundant calls)
 local dedShown = false
@@ -80,23 +80,39 @@ local function hitTest(mx, my)
     return mx >= left and mx <= right and my >= top and my <= bottom
 end
 
+-- True while an ImGui window has the mouse; the bar yields clicks to it.
+local function uiHasMouse()
+    local io = imgui.GetIO()
+    return io ~= nil and io.WantCaptureMouse == true
+end
+
+-- Checks the layout entries initialize() indexes without guards.
+-- @return true, or false and an error message
+function xpFrame.validateLayout(L)
+    if type(L) ~= 'table' then
+        return false, 'Layout is not a table.'
+    end
+    local bg = type(L.xpBar) == 'table' and type(L.xpBar.imgBg) == 'table' and L.xpBar.imgBg.size
+    local complete = type(bg) == 'table' and type(bg[1]) == 'number' and type(bg[2]) == 'number'
+    for _, key in ipairs({ 'dedBar', 'txtJob', 'txtNumbers', 'txtPercent', 'txtDedit' }) do
+        if type(L[key]) ~= 'table' then
+            complete = false
+        end
+    end
+    if not complete then
+        return false, 'Layout is missing required elements.'
+    end
+    return true
+end
+
 -- @param layout  the layout table (layouts/default.lua)
 -- @param ax      initial anchor X (screen pixels)
 -- @param ay      initial anchor Y (screen pixels)
 function xpFrame.initialize(layout, ax, ay)
     local L = layout
 
-    -- Drag hit-box dimensions come from the layout's main bar size, falling
-    -- back to BAR_W/BAR_H if the layout is missing/incomplete (e.g. loadLayout()
-    -- returned {} on a load failure).
-    local bgSize = L.xpBar and L.xpBar.imgBg and L.xpBar.imgBg.size
-    if bgSize and bgSize[1] and bgSize[2] then
-        barW = bgSize[1]
-        barH = bgSize[2]
-    else
-        barW = BAR_W
-        barH = BAR_H
-    end
+    barW = L.xpBar.imgBg.size[1]
+    barH = L.xpBar.imgBg.size[2]
 
     anchorX = ax or 0
     anchorY = ay or 0
@@ -132,10 +148,10 @@ function xpFrame.initialize(layout, ax, ay)
     txtDedit = uiText.new(L.txtDedit)
     addElement(txtDedit)
 
-    dedShown  = false
+    dedShown = false
 
-    -- Start suppressed; xpReborn.lua calls setFrameVisible(true) once the game
-    -- state confirms the player is logged in and not in a cutscene/zone.
+    -- false so the setFrameVisible(false) below passes its no-change guard and hides
+    -- the root; xpReborn.lua shows the frame once game state allows it.
     suppressed = false
     xpFrame.setFrameVisible(false)
 end
@@ -202,11 +218,25 @@ function xpFrame.update(state, settings, preview)
 end
 
 -- Mouse handler for drag-to-move. Returns nothing; sets e.blocked when consuming.
-function xpFrame.handleMouse(e)
+-- @param locked  true refuses new drags; an active drag still ends on button-up
+function xpFrame.handleMouse(e, locked)
+    -- Checked before the engine: a cancelled drag outlives a frame rebuild.
+    if dragCancelled then
+        if e.message == MSG_LBUTTON_UP then
+            dragCancelled = false
+            e.blocked     = true
+        elseif e.message == MSG_MOUSEMOVE then
+            e.blocked = true
+        end
+        return
+    end
+
     if not engine then return end
 
+    if suppressed then return end
+
     if e.message == MSG_LBUTTON_DOWN then
-        if hitTest(e.x, e.y) then
+        if not locked and not uiHasMouse() and hitTest(e.x, e.y) then
             dragActive  = true
             dragOffsetX = e.x - anchorX
             dragOffsetY = e.y - anchorY
@@ -259,6 +289,11 @@ function xpFrame.setFrameVisible(visible)
     if visible == (not suppressed) then return end
     suppressed = not visible
     if suppressed then
+        if dragActive then
+            dragActive    = false
+            dragCancelled = true
+            anchorDirty   = true
+        end
         root:hide(utils.VIS_DEFAULT)
     else
         root:show(utils.VIS_DEFAULT)
@@ -281,10 +316,15 @@ function xpFrame.destroy()
     txtPct   = nil
     txtDedit = nil
 
-    dragActive  = false
-    anchorDirty = false
-    dedShown    = false
-    suppressed  = false
+    -- An active drag becomes cancelled so the rest of its gesture stays blocked; dragCancelled
+    -- is kept for the same reason.
+    if dragActive then
+        dragCancelled = true
+    end
+    dragActive    = false
+    anchorDirty   = false
+    dedShown      = false
+    suppressed    = false
 end
 
 return xpFrame

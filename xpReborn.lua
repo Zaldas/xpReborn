@@ -17,17 +17,17 @@ local packets         = require('packets')
 local dedicationItems = require('data/dedicationItems')
 local xpFrame         = require('elements/xpFrame')
 local configWindow    = require('elements/configWindow')
+local sprites         = require('libs/spui/sprites')
 
--- Chariot Band; matches dedicationItems.ordered[1]. Shared by defaultSettings and the
--- defaultItemIndex -> defaultItemId migration's out-of-range fallback.
+-- Chariot Band; matches dedicationItems.ordered[1]. Default item and the fallback
+-- for an out-of-range legacy defaultItemIndex.
 local DEFAULT_DEDICATION_ITEM_ID = 15761
 
+-- Screen position "Reset position" moves the bar to.
+local RESET_ANCHOR = { x = 100, y = 100 }
+
 -- Sample dedication data shown in the spui bar while the config window is open and no
--- real dedication is active. Built once here rather than allocated fresh every frame;
--- xpFrame.update() reads it read-only, so it's safe to share across frames. txtDedit
--- intentionally omits a percent suffix -- state.lua's State.refresh builds the real
--- dedication text via string.format('%s: %d / %d', ...) with no percent, so this must
--- match that format exactly.
+-- real dedication is active. Read-only.
 local DEDICATION_PREVIEW = {
     dedication = {
         active   = true,
@@ -37,7 +37,7 @@ local DEDICATION_PREVIEW = {
         acquired = 1000,
         norm     = (2250 - 1000) / 2250,
     },
-    txtDedit = 'Emperor Band: 1000 / 2250',
+    txtDedit = State.formatDedication('Emperor Band', 1000, 2250, false),
 }
 
 local defaultSettings = T{
@@ -61,7 +61,7 @@ local defaultSettings = T{
 }
 
 local xrSettings = defaultSettings   -- initialized in load event
-local frameCount = 0
+local frameCount = 0       -- 0 runs the throttled tick on the next frame
 local THROTTLE   = 30
 
 -- Game state detection
@@ -69,9 +69,9 @@ local pEventSystem     = ashita.memory.find('FFXiMain.dll', 0, 'A0????????84C074
 local pInterfaceHidden = ashita.memory.find('FFXiMain.dll', 0, '8B4424046A016A0050B9????????E8????????F6D81BC040C3', 0, 0)
 
 -- Zone suppression: start true so the frame stays hidden until the player entity
--- confirms login. Cleared in should_hide() once GetMemberTargetIndex(0) is non-zero.
+-- confirms login. Cleared in shouldHide() once zone-in has arrived (State.isZoning false)
+-- and GetMemberTargetIndex(0) is non-zero.
 local frameZoneSuppressed = true
-local zoneInReceived      = true   -- treat initial load as having already "arrived"
 
 local function isGameInterfaceHidden()
     if pEventSystem ~= 0 then
@@ -87,9 +87,9 @@ end
 
 -- Returns true when the bar should be hidden: between zone packets, on title screen,
 -- or during cutscenes / NPC dialogue / world map.
-local function should_hide()
+local function shouldHide()
     if frameZoneSuppressed then
-        if not zoneInReceived then return true end
+        if State.isZoning then return true end
         -- Wait for the player entity to actually spawn in the new zone.
         local pty = AshitaCore:GetMemoryManager():GetParty()
         if not pty or (pty:GetMemberTargetIndex(0) or 0) == 0 then return true end
@@ -102,47 +102,37 @@ local function loadLayout()
     local fn, loadErr = loadfile(addon.path .. 'layouts/default.lua')
     if not fn then
         print(chat.header(addon.name) .. chat.error('Failed to load layout: ' .. tostring(loadErr)))
-        return {}
+        return nil
     end
 
     local ok, result = pcall(fn)
     if not ok then
         print(chat.header(addon.name) .. chat.error('Layout script error: ' .. tostring(result)))
-        return {}
+        return nil
     end
 
     if type(result) ~= 'table' then
         print(chat.header(addon.name) .. chat.error('Layout script did not return a table.'))
-        return {}
+        return nil
+    end
+
+    local valid, validErr = xpFrame.validateLayout(result)
+    if not valid then
+        print(chat.header(addon.name) .. chat.error(validErr))
+        return nil
     end
 
     return result
 end
 
-local function resetDedicationState()
-    State.dedication.active         = false
-    State.dedication.itemName       = ''
-    State.dedication.itemRate       = -1
-    State.dedication.itemMax        = -1
-    State.dedication.acquired       = 0
-    State.dedication.norm           = 1.0
-    State.dedication.awaitingClear  = false
-    State.pendingDedicationItem     = nil
-    State.pendingScrollXp           = false
-    State.pendingScrollXpAt         = nil
-    State.lastAccrual.bonus         = 0
-    State.lastAccrual.at            = 0
-    State.dedicationDirty           = false
-end
-
 local function resetDedication()
-    resetDedicationState()
-    packets.setDedicationFields(State, xrSettings, '', -1, -1, 0)
+    packets.resetDedication(State, xrSettings)
     settings.save()
 end
 
 local function buildCallbacks()
     return {
+        resetAnchor      = RESET_ANCHOR,
         onShowJobLevel   = function(v) xrSettings.display.showJobLevel   = v; settings.save() end,
         onShowNumbers    = function(v) xrSettings.display.showNumbers    = v; settings.save() end,
         onShowPercent    = function(v) xrSettings.display.showPercent    = v; settings.save() end,
@@ -168,64 +158,59 @@ local function buildCallbacks()
             settings.save()
         end,
         onResetAnchor = function()
-            xrSettings.anchor.x = 100
-            xrSettings.anchor.y = 100
-            xpFrame.setAnchor(100, 100)
+            xrSettings.anchor.x = RESET_ANCHOR.x
+            xrSettings.anchor.y = RESET_ANCHOR.y
+            xpFrame.setAnchor(RESET_ANCHOR.x, RESET_ANCHOR.y)
             settings.save()
-            print(chat.header(addon.name) .. chat.message('Position reset to (100, 100).'))
+            print(chat.header(addon.name) .. chat.message(string.format('Position reset to (%d, %d).', RESET_ANCHOR.x, RESET_ANCHOR.y)))
         end,
     }
 end
 local callbacks = buildCallbacks()
 
--- One-time migration: pre-MED-3 settings files store defaultItemIndex (an ordered-list
--- position); resolve it to the equivalent defaultItemId and drop the legacy field.
--- settings.load()'s merge backfills defaultItemId from defaultSettings for old files
--- (missing keys are deep-filled from defaults), so the presence of defaultItemIndex --
--- not the current defaultItemId value, which is always already valid post-merge -- is
--- the only reliable signal that this file predates the defaultItemId field.
--- Must be called on every settings table that gets assigned to xrSettings, not just the
--- initial load: xpReborn is boot-loaded (scripts/default.txt), so the 'load' handler's
--- first settings.load() runs before character login and resolves against the shared
--- defaults-folder file (settingslib.logged_in is still false at that point). The actual
--- per-character file only surfaces later via the xpreborn_settings_update callback below,
--- fired when packet 0x000A drives settings.lua's process_character_switch -- so this must
--- also run there, and in the /xr reload command handler for full self-healing.
+-- Settings files from pre-release builds store defaultItemIndex (an ordered-list position)
+-- and an orphaned dedication.active key. The settings merge always backfills defaultItemId,
+-- so the presence of defaultItemIndex is the only signal of such a file.
+-- Must run on every table assigned to xrSettings: the addon loads before login, so the
+-- per-character file arrives later through the settings callback.
 local function migrateDedicationSettings(s)
     if s.dedication.defaultItemIndex ~= nil then
         local entry = dedicationItems.ordered[s.dedication.defaultItemIndex]
         s.dedication.defaultItemId = entry and entry.id or DEFAULT_DEDICATION_ITEM_ID
         s.dedication.defaultItemIndex = nil
-        -- MED-4 dropped the persisted `active` flag the same phase this field was
-        -- renamed; every file old enough to still have defaultItemIndex also still
-        -- has this orphaned key. Strip it now rather than carrying it forever.
         s.dedication.active = nil
         settings.save()
     end
 end
 
-ashita.events.register('load', 'xpreborn_load_cb', function()
-    xrSettings = settings.load(defaultSettings)
-    migrateDedicationSettings(xrSettings)
-
-    -- state.dedication.active must start false on load/settings reload; it can only
-    -- be set true by packets.refreshDedication()'s buff-presence-verified paths
-    -- (activateDedication on item-use, or the hasKnownItem branch once buff 249 is
-    -- observed) -- never restored directly from a persisted flag, since that flag
-    -- can be stale.
-
+-- Adopts a settings table and rebuilds the frame. State.dedication.active starts false;
+-- only packets.refreshDedication sets it, once buff 249 is observed.
+-- A layout that fails to load keeps the existing frame, or leaves it unbuilt if none exists.
+-- A layout that fails while building leaves the frame unbuilt.
+local function applySettings(s)
+    migrateDedicationSettings(s)
+    packets.resetDedication(State)
+    xrSettings = s
     local layout = loadLayout()
-    xpFrame.initialize(layout, xrSettings.anchor.x, xrSettings.anchor.y)
+    if layout then
+        xpFrame.destroy()
+        local ok, initErr = pcall(xpFrame.initialize, layout, xrSettings.anchor.x, xrSettings.anchor.y)
+        if not ok then
+            print(chat.header(addon.name) .. chat.error('Layout error: ' .. tostring(initErr)))
+            xpFrame.destroy()
+        end
+    else
+        xpFrame.setAnchor(xrSettings.anchor.x, xrSettings.anchor.y)
+    end
+end
+
+ashita.events.register('load', 'xpreborn_load_cb', function()
+    applySettings(settings.load(defaultSettings))
     configWindow.initialize()
 
     settings.register('settings', 'xpreborn_settings_update', function(s)
         if s then
-            migrateDedicationSettings(s)
-            resetDedicationState()
-            xrSettings = s
-            local L = loadLayout()
-            xpFrame.destroy()
-            xpFrame.initialize(L, xrSettings.anchor.x, xrSettings.anchor.y)
+            applySettings(s)
         end
     end)
 
@@ -233,28 +218,36 @@ ashita.events.register('load', 'xpreborn_load_cb', function()
 end)
 
 ashita.events.register('unload', 'xpreborn_unload_cb', function()
+    ashita.events.unregister('load', 'xpreborn_load_cb')
+    ashita.events.unregister('d3d_present', 'xpreborn_present_cb')
+    ashita.events.unregister('packet_in', 'xpreborn_packet_in_cb')
+    ashita.events.unregister('mouse', 'xpreborn_mouse_cb')
+    ashita.events.unregister('command', 'xpreborn_command_cb')
+    settings.unregister('settings', 'xpreborn_settings_update')
+    local pendingAnchor = xpFrame.getAnchor()
+    if pendingAnchor then
+        xrSettings.anchor.x = pendingAnchor.x
+        xrSettings.anchor.y = pendingAnchor.y
+    end
+    settings.save()
     configWindow.destroy()
     xpFrame.destroy()
-    settings.save()
+    -- Unload only: gdifonts keeps its freed interface after this, so a later frame
+    -- rebuild would create fonts on it.
+    sprites.dispose()
 end)
 
 ashita.events.register('d3d_present', 'xpreborn_present_cb', function()
     -- Config window draws regardless of bar visibility (player may open it any time).
     configWindow.draw(xrSettings, State, callbacks)
 
-    -- Suppress bar while on title screen, zoning, or during cutscenes.
-    local hide = should_hide()
-    xpFrame.setFrameVisible(not hide)
-    if hide then return end
-
-    -- Throttled data refresh
-    frameCount = (frameCount + 1) % THROTTLE
+    -- Throttled data refresh; runs while the bar is hidden so buff polling and saving continue.
     if frameCount == 0 then
+        packets.refreshDedication(State, xrSettings)
+
         local memMgr = AshitaCore:GetMemoryManager()
         local player = memMgr and memMgr:GetPlayer()
         State.refresh(player, xrSettings)
-
-        packets.refreshDedication(State, xrSettings)
 
         -- Persist dedication state only when this refresh actually mutated it.
         if State.dedicationDirty then
@@ -262,6 +255,12 @@ ashita.events.register('d3d_present', 'xpreborn_present_cb', function()
             State.dedicationDirty = false
         end
     end
+    frameCount = (frameCount + 1) % THROTTLE
+
+    -- Suppress bar while on title screen, zoning, or during cutscenes.
+    local hide = shouldHide()
+    xpFrame.setFrameVisible(not hide)
+    if hide then return end
 
     -- Persist anchor if user dragged the bar
     local newAnch = xpFrame.getAnchor()
@@ -271,10 +270,7 @@ ashita.events.register('d3d_present', 'xpreborn_present_cb', function()
         settings.save()
     end
 
-    -- While config is open and no real dedication is active, pass sample preview data
-    -- into xpFrame.update() so the spui bar shows a sample alongside the config window.
-    -- State itself is never mutated for this -- xpFrame.update() reads the preview
-    -- table directly when provided.
+    -- While config is open and no real dedication is active, the bar shows sample data.
     local showPreview = configWindow.isOpen() and not State.dedication.active
     xpFrame.update(State, xrSettings, showPreview and DEDICATION_PREVIEW or nil)
 end)
@@ -283,20 +279,17 @@ ashita.events.register('packet_in', 'xpreborn_packet_in_cb', function(e)
     if e.id == packets.ID.ZONE_OUT then
         -- Zone-out: suppress unconditionally until zone-in + entity spawn confirmed.
         frameZoneSuppressed = true
-        zoneInReceived      = false
         xpFrame.setFrameVisible(false)
     elseif e.id == packets.ID.ZONE_IN then
         -- Zone-in arrived; d3d_present will clear frameZoneSuppressed once entity spawns.
         frameZoneSuppressed = true
-        zoneInReceived      = true
     end
 
     packets.handleIn(e, State, xrSettings)
 end)
 
 ashita.events.register('mouse', 'xpreborn_mouse_cb', function(e)
-    if xrSettings.lockPosition then return end
-    xpFrame.handleMouse(e)
+    xpFrame.handleMouse(e, xrSettings.lockPosition)
 end)
 
 ashita.events.register('command', 'xpreborn_command_cb', function(e)
@@ -312,17 +305,13 @@ ashita.events.register('command', 'xpreborn_command_cb', function(e)
         resetDedication()
         print(chat.header(addon.name) .. chat.message('Dedication reset.'))
     elseif cmd == 'reload' then
-        resetDedicationState()
-        xrSettings = settings.load(defaultSettings)
-        migrateDedicationSettings(xrSettings)
-        local L = loadLayout()
-        xpFrame.destroy()
-        xpFrame.initialize(L, xrSettings.anchor.x, xrSettings.anchor.y)
+        settings.reload()
         print(chat.header(addon.name) .. chat.message('Reloaded.'))
     elseif cmd == 'help' then
-        print(chat.header(addon.name) .. chat.message('/xr               Toggle config window'))
+        print(chat.header(addon.name) .. chat.message('/xpreborn or /xr  Toggle config window'))
         print(chat.header(addon.name) .. chat.message('/xr reset         Clear dedication session'))
         print(chat.header(addon.name) .. chat.message('/xr reload        Reload settings and layout'))
+        print(chat.header(addon.name) .. chat.message('/xr help          List commands'))
     else
         print(chat.header(addon.name) .. chat.warning(string.format('Unknown command: %s. Use /xr help.', cmd)))
     end

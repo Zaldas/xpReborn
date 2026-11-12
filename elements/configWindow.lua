@@ -8,9 +8,7 @@ local uiTheme         = require('libs/uiTheme')
 
 local M = {}
 
--- ImGuiWindowFlags_AlwaysAutoResize = 64
-local IMGUI_AUTO_RESIZE = 64
-local WINDOW_WIDTH      = 240
+local WINDOW_WIDTH = 240
 
 local open = false
 
@@ -37,7 +35,7 @@ end
 -- Draw the config window. Call every frame from d3d_present.
 -- xrSettings: live settings table (read for current values)
 -- state:      shared state table (reads state.dedication for progress display)
--- cb:         callbacks table (see header doc / plan)
+-- cb:         callbacks table (buildCallbacks in xpReborn.lua); cb.resetAnchor is { x, y }
 function M.draw(xrSettings, state, cb)
     if not open then return end
 
@@ -52,7 +50,6 @@ function M.draw(xrSettings, state, cb)
         if imgui.Checkbox('Show job / level', showJobLevel) then
             cb.onShowJobLevel(showJobLevel[1])
         end
-        uiTheme.helpMarker('Show the current job abbreviation and level (e.g. NIN 75).')
 
         local showNumbers = { xrSettings.display.showNumbers == true }
         if imgui.Checkbox('Show numbers', showNumbers) then
@@ -64,7 +61,6 @@ function M.draw(xrSettings, state, cb)
         if imgui.Checkbox('Show percent', showPercent) then
             cb.onShowPercent(showPercent[1])
         end
-        uiTheme.helpMarker('Show progress as a percentage beneath the numbers.')
 
         local showDedication = { xrSettings.display.showDedication == true }
         if imgui.Checkbox('Show dedication', showDedication) then
@@ -86,11 +82,8 @@ function M.draw(xrSettings, state, cb)
         local ded = state.dedication
         imgui.Indent(uiTheme.indent)
         if ded.active and ded.itemMax > 0 then
-            local pct      = (1 - ded.norm) * 100
-            local acquired = math.floor(ded.acquired)
-            local firstNum = xrSettings.dedication.overflowEnabled and acquired or math.min(acquired, ded.itemMax)
-            local progressStr = string.format('%s: %d / %d (%.0f%%)', ded.itemName, firstNum, ded.itemMax, pct)
-            imgui.Text(progressStr)
+            local label = state.formatDedication(ded.itemName, ded.acquired, ded.itemMax, xrSettings.dedication.overflowEnabled)
+            imgui.Text(string.format('%s (%.0f%%)', label, (1 - ded.norm) * 100))
         elseif ded.active then
             imgui.Text('Dedication active (no budget set)')
         else
@@ -143,7 +136,9 @@ function M.draw(xrSettings, state, cb)
             cb.onResetDedication()
         end
         if imgui.IsItemHovered() then
-            imgui.SetTooltip('Clear the current dedication session. Use this if tracking is out of sync.')
+            uiTheme.tooltipBegin()
+            imgui.TextUnformatted('Clear the current dedication session. Use this if tracking is out of sync.')
+            uiTheme.tooltipEnd()
         end
 
         imgui.Spacing()
@@ -158,7 +153,6 @@ function M.draw(xrSettings, state, cb)
         if imgui.Checkbox('Lock position', lockPosition) then
             cb.onLockPosition(lockPosition[1])
         end
-        uiTheme.helpMarker('Disable drag-to-move so the bar cannot be accidentally repositioned.')
         imgui.Unindent(uiTheme.indent)
 
         imgui.Spacing()
@@ -169,16 +163,19 @@ function M.draw(xrSettings, state, cb)
             cb.onResetAnchor()
         end
         if imgui.IsItemHovered() then
-            imgui.SetTooltip('Snap bar to position (100, 100). Use if it has moved off-screen.')
+            uiTheme.tooltipBegin()
+            imgui.TextUnformatted(string.format(
+                'Snap bar to position (%d, %d). Use if it has moved off-screen.', cb.resetAnchor.x, cb.resetAnchor.y))
+            uiTheme.tooltipEnd()
         end
     end
 
     local n = uiTheme.push()
-    imgui.SetNextWindowSize({ WINDOW_WIDTH, 0 }, 1)
+    imgui.SetNextWindowSize({ WINDOW_WIDTH, 0 }, ImGuiCond_Always)
 
     local winOpen = { true }
     local ok, err = true, nil
-    if imgui.Begin('xpReborn.' .. addon.version, winOpen, IMGUI_AUTO_RESIZE) then
+    if imgui.Begin('xpReborn.' .. addon.version, winOpen, ImGuiWindowFlags_AlwaysAutoResize) then
         ok, err = pcall(drawBody)
     end
     imgui.End()
@@ -187,7 +184,11 @@ function M.draw(xrSettings, state, cb)
     if not winOpen[1] then
         open = false
     end
-    if not ok then error(err, 0) end
+    if not ok then
+        -- Closed so a persistent error is raised once, not every frame.
+        open = false
+        error(err, 0)
+    end
 end
 
 return M

@@ -1,6 +1,6 @@
 -- state.lua
--- Shared runtime state. Written by xpReborn.lua (API poll) and packets.lua (gain events).
--- Read by xpFrame.lua via update(state, settings).
+-- Shared runtime state. Written by State.refresh (player memory) and packets.lua (packets,
+-- buff poll and resets). Read by xpFrame.lua via update(state, settings).
 
 local State = {
     -- XP mode: 'xp' or 'lp'
@@ -22,7 +22,7 @@ local State = {
     txtJob      = '',      -- e.g. 'NIN 75'
     txtNumbers  = '',      -- e.g. '1234 / 8000' or '8500 / 10000  |  14 Merits'
     txtPercent  = '',      -- e.g. '15.4%'
-    txtDedit    = '',      -- e.g. 'Emperor Band — 1000 / 2250'
+    txtDedit    = '',      -- e.g. 'Emperor Band: 1000 / 2250'
 
     -- Dedication tracking
     dedication  = {
@@ -37,39 +37,48 @@ local State = {
         awaitingClear = false,
     },
 
-    -- Zone suppression: set true on 0x00B, cleared on 0x00A
+    -- Set true on 0x00B, cleared on 0x00A. Pauses the dedication buff poll and hides the bar.
     isZoning    = false,
+
+    -- os.time() of the last zone-in; the buff poll waits a fixed delay after it.
+    zoneTime    = 0,
 
     -- Set true by packets.lua whenever a dedication field changes on disk;
     -- consumed (and cleared) by xpReborn.lua's throttle-tick save.
     dedicationDirty = false,
 
     -- Set by packets.lua when an XP-scroll item's follow-up XP message should be
-    -- excluded from dedication accumulation.
-    pendingScrollXp = false,
+    -- excluded from dedication accumulation, with the os.time() it was armed at.
+    pendingScrollXp   = false,
+    pendingScrollXpAt = 0,
+
+    -- Dedication item from the last item-finish, consumed by the buff poll, with the
+    -- os.time() it was seen at. false when none is pending.
+    pendingDedicationItem = false,
+    pendingDedicationAt   = 0,
+
+    -- os.time() of the last mob-defeat battle message (0 once a chain XP closes it), and
+    -- the unchained bonus credited since it.
+    lastDefeatAt = 0,
+    defeatBonus  = 0,
 
     -- Most recent bonus credited to the dedication budget, with the os.time() it was
     -- credited at. Read by packets.lua's scroll refund; zeroed once refunded or once an
     -- XP message is excluded on its own.
     lastAccrual = { bonus = 0, at = 0 },
-
-    -- NOTE: state.pendingDedicationItem, state.zoneTime, and state.pendingScrollXpAt
-    -- are also part of this module's runtime shape but have no meaningful non-nil
-    -- default (a Lua table constructor silently drops any `= nil` entry, so they
-    -- cannot be declared as real keys here). All three are created dynamically by
-    -- packets.lua and are absent (nil) until first set: pendingDedicationItem on
-    -- item-use, consumed by the next buff-poll tick; zoneTime on zone-in, used to
-    -- gate the post-zone buff-poll delay; pendingScrollXpAt is the companion
-    -- timestamp for pendingScrollXp's timeout, set alongside it on scroll-use.
-    -- It is not itself nil'd when pendingScrollXp is consumed or expires (only
-    -- the flag is) — safe because it's never read except when pendingScrollXp
-    -- is true, and gets overwritten on the next scroll-use.
 }
+
+-- Dedication label text. Without overflow, acquired is shown clamped to max.
+function State.formatDedication(itemName, acquired, itemMax, overflow)
+    local whole    = math.floor(acquired)
+    local firstNum = overflow and whole or math.min(whole, itemMax)
+    return string.format('%s: %d / %d', itemName, firstNum, itemMax)
+end
 
 -- Rebuild display strings and bar norms from Ashita player memory.
 -- Called by xpReborn.lua on the throttle tick (every 30 frames).
--- player: result of AshitaCore:GetMemoryManager():GetPlayer()
--- settings: the live settings table (reads display.show* flags)
+-- player:     result of AshitaCore:GetMemoryManager():GetPlayer()
+-- xrSettings: the live settings table (reads dedication.overflowEnabled)
 function State.refresh(player, xrSettings)
     if not player then return end
 
@@ -102,11 +111,11 @@ function State.refresh(player, xrSettings)
         State.lpNorm     = math.min(State.lpCurrent / State.lpMax, 1.0)
         State.meritCount = player:GetMeritPoints()
         State.meritMax   = player:GetMeritPointsMax()
-        State.txtNumbers = string.format('%d / 10000  |  %d Merits', State.lpCurrent, State.meritCount)
+        State.txtNumbers = string.format('%d / %d  |  %d Merits', State.lpCurrent, State.lpMax, State.meritCount)
         State.txtPercent = string.format('%.1f%%', State.lpNorm * 100)
     else
-        State.xpCurrent  = player:GetExpCurrent()
-        State.xpNeeded   = math.max(player:GetExpNeeded(), 1)
+        State.xpCurrent  = rawCurrent
+        State.xpNeeded   = math.max(rawNeeded, 1)
         State.xpNorm     = math.min(State.xpCurrent / State.xpNeeded, 1.0)
         State.txtNumbers = string.format('%d / %d', State.xpCurrent, State.xpNeeded)
         State.txtPercent = string.format('%.1f%%', State.xpNorm * 100)
@@ -117,9 +126,7 @@ function State.refresh(player, xrSettings)
     if ded.active and ded.itemMax > 0 then
         ded.norm = math.max((ded.itemMax - ded.acquired) / ded.itemMax, 0.0)
         local overflow = xrSettings and xrSettings.dedication and xrSettings.dedication.overflowEnabled
-        local acquired = math.floor(ded.acquired)
-        local firstNum = overflow and acquired or math.min(acquired, ded.itemMax)
-        State.txtDedit = string.format('%s: %d / %d', ded.itemName, firstNum, ded.itemMax)
+        State.txtDedit = State.formatDedication(ded.itemName, ded.acquired, ded.itemMax, overflow)
     elseif ded.active then
         ded.norm      = 1.0
         State.txtDedit = 'Dedication active'

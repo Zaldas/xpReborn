@@ -80,12 +80,6 @@ function uiElement:init(layout)
         self.snapToRaster = layout.snapToRaster
     end
 
-    -- Opt out of the container traversal skip. Set to true in element code (not layouts)
-    -- for elements whose data changes every frame regardless of game tick (e.g. cast bars).
-    self.alwaysUpdate = false
-    -- Set by subclasses each update(); aggregated upward by uiContainer for skip guard.
-    self._isAnimating = false
-
     return self.isEnabled
 end
 
