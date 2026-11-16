@@ -379,7 +379,10 @@ function M.refreshDedication(state, xrSettings)
     local party  = memMgr and memMgr:GetParty()
     if not player or not party then return end
 
-    -- The buff list is not trustworthy until the player entity has spawned.
+    -- The buff list is only trustworthy while fully logged in, spawned and not zoning.
+    -- Logout can deliver a zone-in packet, so the packet-driven isZoning flag alone does not cover it.
+    if player:GetLoginStatus() ~= 2 or player:GetIsZoning() ~= 0 then return end
+    if GetPlayerEntity() == nil then return end
     if (party:GetMemberTargetIndex(0) or 0) == 0 then return end
 
     local buffs = player:GetBuffs()
